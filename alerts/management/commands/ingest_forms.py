@@ -1,4 +1,8 @@
 import re
+
+import pandas as pd
+from django.core.management.base import BaseCommand, CommandError
+
 import pandas as pd
 from django.core.management.base import BaseCommand, CommandError
 from alerts.models import (
