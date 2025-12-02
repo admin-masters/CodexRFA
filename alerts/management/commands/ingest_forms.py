@@ -40,6 +40,7 @@ class Command(BaseCommand):
         self._load_languages(data.get("languages"))
         self._load_forms(data.get("forms"))
         questions = self._load_questions(data.get("questions"))
+        self._load_question_translations(data.get("questiontranslations"), questions)
         self._load_question_conditions(data.get("questionconditions"), questions)
         options = self._load_options(data.get("questionoptions"))
         self._load_option_translations(data.get("optiontranslations"), options)
@@ -83,6 +84,65 @@ class Command(BaseCommand):
             )
 
     # ============================================================
+    # STACKED-LANGUAGE PARSING
+    # ============================================================
+
+    def _resolve_language_from_label(self, label, languages):
+        norm = self._normalize_column(label)
+        for lang in languages.values():
+            if norm in {
+                self._normalize_column(lang.code),
+                self._normalize_column(lang.name),
+            }:
+                return lang
+        return None
+
+    def _parse_language_blocks(self, df, expected_headers, languages):
+        """Parse stacked blocks like:
+        English:
+            form_id, form_name, ...
+            ...
+        Hindi:
+            form_id, form_name, ...
+        """
+        records = []
+        if df is None:
+            return records
+
+        rows = df.fillna("").values.tolist()
+        current_language = None
+        header = []
+
+        for row in rows:
+            # Skip fully empty rows
+            if all(str(cell).strip() == "" for cell in row):
+                continue
+
+            # Detect language section label
+            possible_language = self._resolve_language_from_label(row[0], languages)
+            if possible_language:
+                current_language = possible_language
+                header = []
+                continue
+
+            # Detect header row
+            normalized_row = [self._normalize_column(cell) for cell in row]
+            if not header and set(expected_headers).issubset(set(normalized_row)):
+                header = normalized_row
+                continue
+
+            # Normal data row
+            if current_language and header:
+                entry = {
+                    header[idx]: row[idx]
+                    for idx in range(min(len(header), len(row)))
+                }
+                entry["language_code"] = current_language.code
+                records.append(entry)
+
+        return records
+
+    # ============================================================
     # LOADERS
     # ============================================================
 
@@ -101,27 +161,49 @@ class Command(BaseCommand):
         if df is None:
             return
 
-        self._require_columns(df, ["form_id"], "Forms")
-
         languages = {lang.code: lang for lang in Language.objects.all()}
 
-        for _, row in df.iterrows():
-            form_id = self._get_required_value(row, "form_id", "Forms")
+        # Path A: standard format (form_id present in columns)
+        if "form_id" in df.columns:
+            self._require_columns(df, ["form_id"], "Forms")
+            for _, row in df.iterrows():
+                form_id = self._get_required_value(row, "form_id", "Forms")
+                form, _ = Form.objects.update_or_create(
+                    form_id=form_id,
+                    defaults={"description": row.get("description", "")},
+                )
+
+                for code, language in languages.items():
+                    form_name = row.get(code)
+                    if pd.notna(form_name):
+                        FormTranslation.objects.update_or_create(
+                            form=form,
+                            language=language,
+                            defaults={"form_name": form_name},
+                        )
+            return
+
+        # Path B: stacked-language format
+        form_rows = self._parse_language_blocks(
+            df, ["form_id", "form_name", "description"], languages
+        )
+        for entry in form_rows:
+            form_id = entry.get("form_id")
+            if not form_id:
+                continue
 
             form, _ = Form.objects.update_or_create(
                 form_id=form_id,
-                defaults={"description": row.get("description", "")},
+                defaults={"description": entry.get("description", "")},
             )
 
-            # Create translations for each language present
-            for code, language in languages.items():
-                name = row.get(code)
-                if pd.notna(name):
-                    FormTranslation.objects.update_or_create(
-                        form=form,
-                        language=language,
-                        defaults={"form_name": name},
-                    )
+            language = languages.get(entry.get("language_code"))
+            if language and pd.notna(entry.get("form_name")):
+                FormTranslation.objects.update_or_create(
+                    form=form,
+                    language=language,
+                    defaults={"form_name": entry.get("form_name")},
+                )
 
     def _load_questions(self, df):
         question_map = {}
@@ -160,27 +242,47 @@ class Command(BaseCommand):
 
             question_map[qid] = question
 
-            # Translations
-            for language in Language.objects.all():
-                col = language.code
-                text = row.get(col)
-                if pd.notna(text):
-                    QuestionTranslation.objects.update_or_create(
-                        question=question,
-                        language=language,
-                        defaults={"question_text": text},
-                    )
-
         return question_map
+
+    def _load_question_translations(self, df, questions):
+        if df is None:
+            return
+
+        languages = {lang.code: lang for lang in Language.objects.all()}
+
+        if "language_code" in df.columns:
+            self._require_columns(
+                df,
+                ["question_id", "language_code", "question_text"],
+                "QuestionTranslations",
+            )
+            records = df.to_dict("records")
+        else:
+            records = self._parse_language_blocks(
+                df, ["question_id", "question_text"], languages
+            )
+
+        for entry in records:
+            qid = entry.get("question_id")
+            question = questions.get(qid)
+            language = languages.get(entry.get("language_code"))
+            if not question or not language:
+                continue
+
+            text = entry.get("question_text")
+            if pd.notna(text):
+                QuestionTranslation.objects.update_or_create(
+                    question=question,
+                    language=language,
+                    defaults={"question_text": text},
+                )
 
     def _load_question_conditions(self, df, questions):
         if df is None:
             return
 
         self._require_columns(
-            df,
-            ["question_id", "trigger_option_id"],
-            "QuestionConditions",
+            df, ["question_id", "trigger_option_id"], "QuestionConditions"
         )
 
         for _, row in df.iterrows():
@@ -189,7 +291,9 @@ class Command(BaseCommand):
             if not question:
                 continue
 
-            option_id = self._get_required_value(row, "trigger_option_id", "QuestionConditions")
+            option_id = self._get_required_value(
+                row, "trigger_option_id", "QuestionConditions"
+            )
 
             try:
                 option = QuestionOption.objects.get(option_id=option_id)
@@ -236,26 +340,37 @@ class Command(BaseCommand):
         if df is None:
             return
 
-        self._require_columns(
-            df,
-            ["option_id", "language_code", "option_text"],
-            "OptionTranslations",
-        )
+        languages = {lang.code: lang for lang in Language.objects.all()}
 
-        for _, row in df.iterrows():
-            opt_id = self._get_required_value(row, "option_id", "OptionTranslations")
+        if "language_code" in df.columns:
+            self._require_columns(
+                df,
+                ["option_id", "language_code", "option_text"],
+                "OptionTranslations",
+            )
+            records = df.to_dict("records")
+        else:
+            records = self._parse_language_blocks(
+                df, ["option_id", "option_text"], languages
+            )
+
+        for entry in records:
+            opt_id = entry.get("option_id")
             option = options.get(opt_id)
             if not option:
                 continue
 
-            lang_code = self._get_required_value(row, "language_code", "OptionTranslations")
-            language = Language.objects.get(code=lang_code)
+            language = languages.get(entry.get("language_code"))
+            if not language:
+                continue
 
-            OptionTranslation.objects.update_or_create(
-                option=option,
-                language=language,
-                defaults={"option_text": row["option_text"]},
-            )
+            text = entry.get("option_text")
+            if pd.notna(text):
+                OptionTranslation.objects.update_or_create(
+                    option=option,
+                    language=language,
+                    defaults={"option_text": text},
+                )
 
     def _load_redflags(self, df):
         redflags = {}
@@ -271,7 +386,9 @@ class Command(BaseCommand):
                 red_flag_id=red_flag_id,
                 defaults={
                     "severity": row.get("severity", ""),
-                    "default_patient_response": row.get("default_patient_response", ""),
+                    "default_patient_response": row.get(
+                        "default_patient_response", ""
+                    ),
                     "patient_video_url": row.get("patient_video_url", ""),
                     "doctor_at_a_glance": row.get("doctor_at_a_glance", ""),
                     "doctor_video_url": row.get("doctor_video_url", ""),
@@ -286,27 +403,38 @@ class Command(BaseCommand):
         if df is None:
             return
 
-        self._require_columns(
-            df,
-            ["red_flag_id", "language_code"],
-            "RedflagTranslations",
-        )
+        languages = {lang.code: lang for lang in Language.objects.all()}
 
-        for _, row in df.iterrows():
-            rf_id = self._get_required_value(row, "red_flag_id", "RedflagTranslations")
+        if "language_code" in df.columns:
+            self._require_columns(
+                df,
+                ["red_flag_id", "language_code"],
+                "RedflagTranslations",
+            )
+            records = df.to_dict("records")
+        else:
+            records = self._parse_language_blocks(
+                df,
+                ["red_flag_id", "patient_response", "doctor_at_a_glance"],
+                languages,
+            )
+
+        for entry in records:
+            rf_id = entry.get("red_flag_id")
             redflag = redflags.get(rf_id)
             if not redflag:
                 continue
 
-            lang_code = self._get_required_value(row, "language_code", "RedflagTranslations")
-            language = Language.objects.get(code=lang_code)
+            language = languages.get(entry.get("language_code"))
+            if not language:
+                continue
 
             RedFlagTranslation.objects.update_or_create(
                 red_flag=redflag,
                 language=language,
                 defaults={
-                    "patient_response": row.get("patient_response", ""),
-                    "doctor_at_a_glance": row.get("doctor_at_a_glance", ""),
+                    "patient_response": entry.get("patient_response", ""),
+                    "doctor_at_a_glance": entry.get("doctor_at_a_glance", ""),
                 },
             )
 
