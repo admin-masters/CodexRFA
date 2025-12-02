@@ -1,0 +1,5 @@
+Django==5.0.6
+mysqlclient==2.2.4
+sendgrid==6.11.0
+pandas==2.2.2
+python-dotenv==1.0.1
