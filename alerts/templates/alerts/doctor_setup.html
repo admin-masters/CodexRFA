@@ -1,0 +1,16 @@
+{% extends "alerts/base.html" %}
+{% block title %}Doctor Setup{% endblock %}
+{% block content %}
+<h1 class="mb-4">Doctor customization</h1>
+<form method="post" class="card p-4 mb-4">
+    {% csrf_token %}
+    {{ form.as_p }}
+    <button type="submit" class="btn btn-primary">Generate patient link</button>
+</form>
+{% if link %}
+<div class="alert alert-success">
+    <p class="mb-1">Share this link with your patients:</p>
+    <code>{{ link }}</code>
+</div>
+{% endif %}
+{% endblock %}
