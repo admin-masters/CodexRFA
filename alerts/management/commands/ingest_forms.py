@@ -50,7 +50,17 @@ class Command(BaseCommand):
         return normalized
 
     def _normalize_column(self, name):
-        return re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower())
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(name).strip().lower())
+        return normalized.strip("_")
+
+    def _get_required_value(self, row, key, sheet_name):
+        if key not in row:
+            available = ", ".join(row.index.astype(str))
+            raise CommandError(
+                f"Required column '{key}' not found while processing sheet '{sheet_name}'. "
+                f"Available columns: {available}"
+            )
+        return row.get(key)
 
     def _require_columns(self, df, required, sheet_name):
         missing = [col for col in required if col not in df.columns]
@@ -73,8 +83,9 @@ class Command(BaseCommand):
         self._require_columns(df, ["form_id"], "Forms")
         languages = {lang.code: lang for lang in Language.objects.all()}
         for _, row in df.iterrows():
+            form_id = self._get_required_value(row, "form_id", "Forms")
             form, _ = Form.objects.update_or_create(
-                form_id=row["form_id"], defaults={"description": row.get("description", "")}
+                form_id=form_id, defaults={"description": row.get("description", "")}
             )
             for code, language in languages.items():
                 name = row.get(code)
@@ -89,12 +100,14 @@ class Command(BaseCommand):
             return question_map
         self._require_columns(df, ["question_id", "form_id", "sequence_no", "question_type"], "Questions")
         for _, row in df.iterrows():
-            form = Form.objects.get(form_id=row["form_id"])
+            form_id = self._get_required_value(row, "form_id", "Questions")
+            question_id = self._get_required_value(row, "question_id", "Questions")
+            form = Form.objects.get(form_id=form_id)
             parent = None
             if pd.notna(row.get("parent_question_id")):
                 parent = Question.objects.filter(question_id=row.get("parent_question_id")).first()
             question, _ = Question.objects.update_or_create(
-                question_id=row["question_id"],
+                question_id=question_id,
                 defaults={
                     "form": form,
                     "sequence_no": row["sequence_no"],
@@ -104,7 +117,7 @@ class Command(BaseCommand):
                     "shows_text_field": bool(row.get("shows_text_field", False)),
                 },
             )
-            question_map[row["question_id"]] = question
+            question_map[question_id] = question
             for language in Language.objects.all():
                 col = language.code
                 text = row.get(col)
@@ -119,11 +132,13 @@ class Command(BaseCommand):
             return
         self._require_columns(df, ["question_id", "trigger_option_id"], "QuestionConditions")
         for _, row in df.iterrows():
-            question = questions.get(row["question_id"])
+            question_id = self._get_required_value(row, "question_id", "QuestionConditions")
+            question = questions.get(question_id)
             if not question:
                 continue
             try:
-                option = QuestionOption.objects.get(option_id=row["trigger_option_id"])
+                trigger_option_id = self._get_required_value(row, "trigger_option_id", "QuestionConditions")
+                option = QuestionOption.objects.get(option_id=trigger_option_id)
             except QuestionOption.DoesNotExist:
                 continue
             QuestionCondition.objects.update_or_create(question=question, trigger_option=option)
@@ -134,9 +149,11 @@ class Command(BaseCommand):
             return options
         self._require_columns(df, ["option_id", "question_id", "sequence_no"], "QuestionOptions")
         for _, row in df.iterrows():
-            question = Question.objects.get(question_id=row["question_id"])
+            option_id = self._get_required_value(row, "option_id", "QuestionOptions")
+            question_id = self._get_required_value(row, "question_id", "QuestionOptions")
+            question = Question.objects.get(question_id=question_id)
             option, _ = QuestionOption.objects.update_or_create(
-                option_id=row["option_id"],
+                option_id=option_id,
                 defaults={
                     "question": question,
                     "sequence_no": row["sequence_no"],
@@ -144,7 +161,7 @@ class Command(BaseCommand):
                     "shows_text_field": bool(row.get("shows_text_field", False)),
                 },
             )
-            options[row["option_id"]] = option
+            options[option_id] = option
         return options
 
     def _load_option_translations(self, df, options):
@@ -152,10 +169,12 @@ class Command(BaseCommand):
             return
         self._require_columns(df, ["option_id", "language_code", "option_text"], "OptionTranslations")
         for _, row in df.iterrows():
-            option = options.get(row["option_id"])
+            option_id = self._get_required_value(row, "option_id", "OptionTranslations")
+            option = options.get(option_id)
             if not option:
                 continue
-            language = Language.objects.get(code=row["language_code"])
+            language_code = self._get_required_value(row, "language_code", "OptionTranslations")
+            language = Language.objects.get(code=language_code)
             OptionTranslation.objects.update_or_create(
                 option=option, language=language, defaults={"option_text": row["option_text"]}
             )
@@ -166,8 +185,9 @@ class Command(BaseCommand):
             return redflags
         self._require_columns(df, ["red_flag_id"], "Redflags")
         for _, row in df.iterrows():
+            red_flag_id = self._get_required_value(row, "red_flag_id", "Redflags")
             redflag, _ = RedFlag.objects.update_or_create(
-                red_flag_id=row["red_flag_id"],
+                red_flag_id=red_flag_id,
                 defaults={
                     "severity": row.get("severity", ""),
                     "default_patient_response": row.get("default_patient_response", ""),
@@ -176,7 +196,7 @@ class Command(BaseCommand):
                     "doctor_video_url": row.get("doctor_video_url", ""),
                 },
             )
-            redflags[row["red_flag_id"]] = redflag
+            redflags[red_flag_id] = redflag
         return redflags
 
     def _load_redflag_translations(self, df, redflags):
@@ -184,10 +204,12 @@ class Command(BaseCommand):
             return
         self._require_columns(df, ["red_flag_id", "language_code"], "RedflagTranslations")
         for _, row in df.iterrows():
-            redflag = redflags.get(row["red_flag_id"])
+            red_flag_id = self._get_required_value(row, "red_flag_id", "RedflagTranslations")
+            redflag = redflags.get(red_flag_id)
             if not redflag:
                 continue
-            language = Language.objects.get(code=row["language_code"])
+            language_code = self._get_required_value(row, "language_code", "RedflagTranslations")
+            language = Language.objects.get(code=language_code)
             RedFlagTranslation.objects.update_or_create(
                 red_flag=redflag,
                 language=language,
@@ -202,7 +224,9 @@ class Command(BaseCommand):
             return
         self._require_columns(df, ["option_id", "red_flag_id"], "OptionRedFlagMap")
         for _, row in df.iterrows():
-            option = options.get(row["option_id"])
-            redflag = redflags.get(row["red_flag_id"])
+            option_id = self._get_required_value(row, "option_id", "OptionRedFlagMap")
+            red_flag_id = self._get_required_value(row, "red_flag_id", "OptionRedFlagMap")
+            option = options.get(option_id)
+            redflag = redflags.get(red_flag_id)
             if option and redflag:
                 OptionRedFlagMap.objects.update_or_create(option=option, red_flag=redflag)
