@@ -1,0 +1,21 @@
+{% extends "alerts/base.html" %}
+{% block title %}Response{% endblock %}
+{% block content %}
+<h1 class="mb-3">{{ doctor.name }} - Results</h1>
+{% if red_flags %}
+    <div class="alert alert-warning">
+        <strong>Red flags observed.</strong> Please review the guidance below.
+    </div>
+    <ul class="list-unstyled">
+        {% for entry in red_flags %}
+            <li class="red-flag">
+                <p class="mb-1">{{ entry.patient_text }}</p>
+                <a href="{{ entry.red_flag.patient_video_url }}" target="_blank" rel="noopener">Watch patient guidance</a>
+                <div><a href="{% url 'alerts:doctor_redflag' entry.red_flag.red_flag_id %}">Doctor education</a></div>
+            </li>
+        {% endfor %}
+    </ul>
+{% else %}
+    <div class="alert alert-success">No red flags observed. Nothing to worry about.</div>
+{% endif %}
+{% endblock %}
