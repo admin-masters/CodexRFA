@@ -28,10 +28,10 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         path = options["spreadsheet"]
+
         try:
-            # Read all sheets and normalize column names
             data = {
-                name: self._normalize_dataframe(df)
+                name.lower(): self._normalize_dataframe(df)
                 for name, df in pd.read_excel(path, sheet_name=None).items()
             }
         except Exception as exc:
@@ -82,6 +82,18 @@ class Command(BaseCommand):
                 f"Available: {available}"
             )
 
+    def _translation_value(self, row, language):
+        """Attempt multiple column variants to find a translation."""
+        candidates = [
+            language.code,
+            language.name,
+            self._normalize_column(language.name),
+        ]
+        for key in candidates:
+            if key in row and pd.notna(row.get(key)):
+                return row.get(key)
+        return None
+
     # ============================================================
     # LOADERS
     # ============================================================
@@ -113,9 +125,9 @@ class Command(BaseCommand):
                 defaults={"description": row.get("description", "")},
             )
 
-            # Create translations for each language present
+            # Create translations (using robust lookup)
             for code, language in languages.items():
-                name = row.get(code)
+                name = self._translation_value(row, language)
                 if pd.notna(name):
                     FormTranslation.objects.update_or_create(
                         form=form,
@@ -160,10 +172,9 @@ class Command(BaseCommand):
 
             question_map[qid] = question
 
-            # Translations
+            # Translations using robust lookup
             for language in Language.objects.all():
-                col = language.code
-                text = row.get(col)
+                text = self._translation_value(row, language)
                 if pd.notna(text):
                     QuestionTranslation.objects.update_or_create(
                         question=question,
@@ -189,10 +200,10 @@ class Command(BaseCommand):
             if not question:
                 continue
 
-            option_id = self._get_required_value(row, "trigger_option_id", "QuestionConditions")
+            opt_id = self._get_required_value(row, "trigger_option_id", "QuestionConditions")
 
             try:
-                option = QuestionOption.objects.get(option_id=option_id)
+                option = QuestionOption.objects.get(option_id=opt_id)
             except QuestionOption.DoesNotExist:
                 continue
 
@@ -265,10 +276,10 @@ class Command(BaseCommand):
         self._require_columns(df, ["red_flag_id"], "Redflags")
 
         for _, row in df.iterrows():
-            red_flag_id = self._get_required_value(row, "red_flag_id", "Redflags")
+            rfid = self._get_required_value(row, "red_flag_id", "Redflags")
 
             redflag, _ = RedFlag.objects.update_or_create(
-                red_flag_id=red_flag_id,
+                red_flag_id=rfid,
                 defaults={
                     "severity": row.get("severity", ""),
                     "default_patient_response": row.get("default_patient_response", ""),
@@ -278,7 +289,7 @@ class Command(BaseCommand):
                 },
             )
 
-            redflags[red_flag_id] = redflag
+            redflags[rfid] = redflag
 
         return redflags
 
@@ -293,8 +304,8 @@ class Command(BaseCommand):
         )
 
         for _, row in df.iterrows():
-            rf_id = self._get_required_value(row, "red_flag_id", "RedflagTranslations")
-            redflag = redflags.get(rf_id)
+            rfid = self._get_required_value(row, "red_flag_id", "RedflagTranslations")
+            redflag = redflags.get(rfid)
             if not redflag:
                 continue
 
