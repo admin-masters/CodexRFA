@@ -28,18 +28,19 @@ class Command(BaseCommand):
         path = options["spreadsheet"]
         try:
             data = {name: self._normalize_dataframe(df) for name, df in pd.read_excel(path, sheet_name=None).items()}
+            raw_data = {name: df for name, df in pd.read_excel(path, sheet_name=None, header=None).items()}
         except Exception as exc:
             raise CommandError(f"Unable to read spreadsheet: {exc}")
 
         self._load_languages(data.get("Languages"))
-        self._load_forms(data.get("Forms"))
+        self._load_forms(data.get("Forms"), raw_data.get("Forms"))
         questions = self._load_questions(data.get("Questions"))
-        self._load_question_translations(data.get("QuestionTranslations"), questions)
+        self._load_question_translations(data.get("QuestionTranslations"), questions, raw_data.get("QuestionTranslations"))
         self._load_question_conditions(data.get("QuestionConditions"), questions)
         options = self._load_options(data.get("QuestionOptions"))
-        self._load_option_translations(data.get("OptionTranslations"), options)
+        self._load_option_translations(data.get("OptionTranslations"), options, raw_data.get("OptionTranslations"))
         redflags = self._load_redflags(data.get("Redflags"))
-        self._load_redflag_translations(data.get("RedflagTranslations"), redflags)
+        self._load_redflag_translations(data.get("RedflagTranslations"), redflags, raw_data.get("RedflagTranslations"))
         self._load_option_redflag_map(data.get("OptionRedFlagMap"), options, redflags)
         self.stdout.write(self.style.SUCCESS("Ingestion complete"))
 
@@ -110,6 +111,13 @@ class Command(BaseCommand):
         current_language = None
         header = []
 
+        # If the language label was swallowed into the column header (first row was the
+        # language name), fall back to using the first column label as the current language.
+        if len(df.columns) > 0:
+            header_language = self._resolve_language_from_label(df.columns[0], languages)
+            if header_language:
+                current_language = header_language
+
         for row in rows:
             if all(str(cell).strip() == "" for cell in row):
                 continue
@@ -139,7 +147,7 @@ class Command(BaseCommand):
         for _, row in df.iterrows():
             Language.objects.update_or_create(code=row["language_code"], defaults={"name": row["language_name"]})
 
-    def _load_forms(self, df):
+    def _load_forms(self, df, raw_df=None):
         if df is None:
             return
         languages = {lang.code: lang for lang in Language.objects.all()}
@@ -160,7 +168,8 @@ class Command(BaseCommand):
             return
 
         # Fallback for stacked language blocks (e.g., English/Hindi header sections)
-        form_rows = self._parse_language_blocks(df, ["form_id", "form_name", "description"], languages)
+        source_df = raw_df if raw_df is not None else df
+        form_rows = self._parse_language_blocks(source_df, ["form_id", "form_name", "description"], languages)
         for entry in form_rows:
             form_id = entry.get("form_id")
             if not form_id:
@@ -201,7 +210,7 @@ class Command(BaseCommand):
             question_map[question_id] = question
         return question_map
 
-    def _load_question_translations(self, df, questions):
+    def _load_question_translations(self, df, questions, raw_df=None):
         if df is None:
             return
 
@@ -219,7 +228,8 @@ class Command(BaseCommand):
                 for _, row in iterator
             )
         else:
-            records = self._parse_language_blocks(df, ["question_id", "question_text"], languages)
+            source_df = raw_df if raw_df is not None else df
+            records = self._parse_language_blocks(source_df, ["question_id", "question_text"], languages)
 
         for entry in records:
             question = questions.get(entry.get("question_id"))
@@ -269,7 +279,7 @@ class Command(BaseCommand):
             options[option_id] = option
         return options
 
-    def _load_option_translations(self, df, options):
+    def _load_option_translations(self, df, options, raw_df=None):
         if df is None:
             return
         languages = {lang.code: lang for lang in Language.objects.all()}
@@ -278,7 +288,8 @@ class Command(BaseCommand):
             self._require_columns(df, ["option_id", "language_code", "option_text"], "OptionTranslations")
             records = df.to_dict("records")
         else:
-            records = self._parse_language_blocks(df, ["option_id", "option_text"], languages)
+            source_df = raw_df if raw_df is not None else df
+            records = self._parse_language_blocks(source_df, ["option_id", "option_text"], languages)
 
         for entry in records:
             option_id = entry.get("option_id")
@@ -312,7 +323,7 @@ class Command(BaseCommand):
             redflags[red_flag_id] = redflag
         return redflags
 
-    def _load_redflag_translations(self, df, redflags):
+    def _load_redflag_translations(self, df, redflags, raw_df=None):
         if df is None:
             return
         languages = {lang.code: lang for lang in Language.objects.all()}
@@ -321,8 +332,9 @@ class Command(BaseCommand):
             self._require_columns(df, ["red_flag_id", "language_code"], "RedflagTranslations")
             records = df.to_dict("records")
         else:
+            source_df = raw_df if raw_df is not None else df
             records = self._parse_language_blocks(
-                df, ["red_flag_id", "patient_response", "doctor_at_a_glance"], languages
+                source_df, ["red_flag_id", "patient_response", "doctor_at_a_glance"], languages
             )
 
         for entry in records:
