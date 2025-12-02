@@ -1,0 +1,11 @@
+{% extends "alerts/base.html" %}
+{% block title %}{{ red_flag.red_flag_id }}{% endblock %}
+{% block content %}
+<h1>{{ red_flag.red_flag_id }}</h1>
+<p>{{ red_flag.doctor_at_a_glance }}</p>
+{% if red_flag.doctor_video_url %}
+<div class="ratio ratio-16x9">
+    <iframe src="{{ red_flag.doctor_video_url }}" allowfullscreen></iframe>
+</div>
+{% endif %}
+{% endblock %}

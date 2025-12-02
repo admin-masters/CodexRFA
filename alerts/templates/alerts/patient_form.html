@@ -1,0 +1,78 @@
+{% extends "alerts/base.html" %}
+{% block title %}{{ form.form_id }}{% endblock %}
+{% block content %}
+<h1 class="mb-3">{{ doctor.name }} - {{ form.form_id }}</h1>
+<p class="text-muted">Language: {{ language.name }}</p>
+<form method="post" class="card p-4" id="patient-form">
+    {% csrf_token %}
+    {% for q in questions %}
+        <div class="mb-3 question" data-question-id="{{ q.id }}" data-parent="{{ q.parent_id }}" data-conditions="{{ q.conditions|join:',' }}">
+            <label class="form-label"><strong>{{ q.text }}</strong></label>
+            {% if q.type == 'text' %}
+                <input type="text" class="form-control" name="q_{{ q.id }}">
+            {% elif q.type == 'select' %}
+                {% for opt in q.options %}
+                    <div class="form-check">
+                        <input class="form-check-input option-input" type="radio" name="q_{{ q.id }}" value="{{ opt.id }}" id="{{ q.id }}_{{ opt.id }}">
+                        <label class="form-check-label" for="{{ q.id }}_{{ opt.id }}">{{ opt.text }}</label>
+                        {% if opt.shows_text_field %}
+                            <input type="text" class="form-control mt-2 option-text" name="q_{{ q.id }}_text" placeholder="Please specify" style="display:none;">
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            {% else %}
+                {% for opt in q.options %}
+                    <div class="form-check">
+                        <input class="form-check-input option-input" type="checkbox" name="q_{{ q.id }}" value="{{ opt.id }}" id="{{ q.id }}_{{ opt.id }}">
+                        <label class="form-check-label" for="{{ q.id }}_{{ opt.id }}">{{ opt.text }}</label>
+                        {% if opt.shows_text_field %}
+                            <input type="text" class="form-control mt-2 option-text" name="q_{{ q.id }}_text" placeholder="Please specify" style="display:none;">
+                        {% endif %}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        </div>
+    {% endfor %}
+    <button type="submit" class="btn btn-primary">Submit</button>
+</form>
+{% endblock %}
+{% block extra_js %}
+<script>
+function evaluateVisibility() {
+    document.querySelectorAll('.question').forEach(function(q) {
+        const parent = q.dataset.parent;
+        const conditions = q.dataset.conditions ? q.dataset.conditions.split(',').filter(Boolean) : [];
+        if (!parent || conditions.length === 0) {
+            q.style.display = '';
+            return;
+        }
+        const selected = [];
+        document.querySelectorAll(`[name="q_${parent}"]:checked`).forEach(function(input) {
+            selected.push(input.value);
+        });
+        if (conditions.some(c => selected.includes(c))) {
+            q.style.display = '';
+        } else {
+            q.style.display = 'none';
+        }
+    });
+}
+
+document.querySelectorAll('.option-input').forEach(function(input) {
+    input.addEventListener('change', function() {
+        const textField = this.closest('.form-check').querySelector('.option-text');
+        if (textField) {
+            if (this.checked) {
+                textField.style.display = '';
+            } else {
+                textField.value = '';
+                textField.style.display = 'none';
+            }
+        }
+        evaluateVisibility();
+    });
+});
+
+evaluateVisibility();
+</script>
+{% endblock %}

@@ -1,0 +1,15 @@
+<h2>Red flag alert for patient {{ submission.patient_id }}</h2>
+<p>Record ID: {{ submission.record_id }}</p>
+<p>Doctor: {{ doctor.name }} ({{ doctor.clinic_name }})</p>
+<hr>
+<h3>Red flags</h3>
+<ul>
+{% for entry in red_flags %}
+    <li>
+        <strong>{{ entry.red_flag.red_flag_id }}</strong> - {{ entry.doctor_text }}<br>
+        <a href="{{ base_url }}{% url 'alerts:doctor_redflag' entry.red_flag.red_flag_id %}">At a glance + video</a>
+    </li>
+{% endfor %}
+</ul>
+<h3>Patient responses</h3>
+<pre style="background:#f5f5f5;padding:1rem;">{{ submission.responses|safe }}</pre>
